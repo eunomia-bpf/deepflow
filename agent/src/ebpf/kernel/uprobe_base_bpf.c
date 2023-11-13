@@ -115,14 +115,14 @@ static __inline __s64 get_current_goroutine(void)
 {
 	//   __u64 current_thread = bpf_get_current_pid_tgid();
 	//   __s64 *goid_ptr = bpf_map_lookup_elem(&goroutines_map, &current_thread);
-	__u32 key = 0;
-	struct spin_lock_container *lock =
-		bpf_map_lookup_elem(&goroutines_map_lock, &key);
-	if (!lock)
-		return 0;
-	bpf_spin_lock(&lock->lock);
+	// __u32 key = 0;
+	// struct spin_lock_container *lock =
+	// 	bpf_map_lookup_elem(&goroutines_map_lock, &key);
+	// if (!lock)
+	// 	return 0;
+	// bpf_spin_lock(&lock->lock);
 	__s64 goid = goroutines_map_mocked;
-	bpf_spin_unlock(&lock->lock);
+	// bpf_spin_unlock(&lock->lock);
 	if (goid != -1) {
 		return goid;
 	}
@@ -158,14 +158,14 @@ int runtime_casgstatus(struct pt_regs *ctx)
 	bpf_probe_read(&goid, sizeof(goid), g_ptr + offset_g_goid);
 	__u64 current_thread = bpf_get_current_pid_tgid();
 	//   bpf_map_update_elem(&goroutines_map, &current_thread, &goid, BPF_ANY);
-	__u32 key = 0;
-	struct spin_lock_container *lock =
-	bpf_map_lookup_elem(&goroutines_map_lock, &key);
-	if (!lock)
-		return 0;
-	bpf_spin_lock(&lock->lock);
+	// __u32 key = 0;
+	// struct spin_lock_container *lock =
+	// bpf_map_lookup_elem(&goroutines_map_lock, &key);
+	// if (!lock)
+	// 	return 0;
+	// bpf_spin_lock(&lock->lock);
 	goroutines_map_mocked = goid;
-	bpf_spin_unlock(&lock->lock);
+	// bpf_spin_unlock(&lock->lock);
 	return 0;
 }
 
@@ -201,14 +201,14 @@ int bpf_func_sched_process_exit(struct sched_comm_exit_ctx *ctx)
 	}
 
 	//   bpf_map_delete_elem(&goroutines_map, &id);
-	__u32 key = 0;
-	struct spin_lock_container *lock =
-	bpf_map_lookup_elem(&goroutines_map_lock, &key);
-	if (!lock)
-		return 0;
-	bpf_spin_lock(&lock->lock);
+	// __u32 key = 0;
+	// struct spin_lock_container *lock =
+	// bpf_map_lookup_elem(&goroutines_map_lock, &key);
+	// if (!lock)
+	// 	return 0;
+	// bpf_spin_lock(&lock->lock);
 	goroutines_map_mocked = -1;
-	bpf_spin_unlock(&lock->lock);
+	// bpf_spin_unlock(&lock->lock);
 	return 0;
 }
 
