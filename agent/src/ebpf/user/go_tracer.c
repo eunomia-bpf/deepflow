@@ -738,9 +738,13 @@ void update_go_offsets_to_map(struct bpf_tracer *tracer)
 			continue;
 		offs = &p_off->offs;
 		int pid = p_off->pid;
-		if (!bpf_table_set_value
-		    (tracer, MAP_GO_OFFSETS_MAP_NAME, pid, (void *)offs))
-			continue;
+		// if (!bpf_table_set_value
+		//     (tracer, MAP_GO_OFFSETS_MAP_NAME, pid, (void *)offs))
+		// 	continue;
+		// Update the offsets map
+		struct bpf_map* map =  bpf_object__find_map_by_name(tracer->pobj, MAP_GO_OFFSETS_MAP_NAME);
+		unsigned key = 1;
+		if(!bpf_map_update_elem(bpf_map__fd(map), &key, offs, 0)) continue;
 		len =
 		    snprintf(buff, sizeof(buff), "go%d.%d.%d offsets:",
 			     offs->version >> 16, ((offs->version >> 8) & 0xff),

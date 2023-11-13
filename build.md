@@ -38,7 +38,7 @@ After building, you can find the build results under agent/target/release
 
 - Finally, we build the example program
 ```console
-make -C agent/src/ebpf/samples rust-sample
+make -C /deepflow/agent/src/ebpf rust-sample
 ```
 You can then find the example program at $(pwd)/agent/src/ebpf/samples/rust/target/release/rust_sample
 
