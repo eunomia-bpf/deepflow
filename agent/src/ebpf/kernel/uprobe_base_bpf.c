@@ -49,18 +49,114 @@ struct {
 // 	__uint(max_entries, MAX_SYSTEM_THREADS);
 // } goroutines_map SEC(".maps");
 
-__s64 goroutines_map_mocked = -1;
-
-struct spin_lock_container {
-	struct bpf_spin_lock lock;
+#define MAX_ENTRIES 229
+#define KEY_SIZE_goroutines_map 8
+#define VALUE_SIZE_goroutines_map 8
+struct map_entry_goroutines_map {
+	char used;
+	char key[KEY_SIZE_goroutines_map];
+	char value[VALUE_SIZE_goroutines_map];
 };
 
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__type(key, __u32);
-	__type(value, struct spin_lock_container);
-	__uint(max_entries, 1);
-} goroutines_map_lock SEC(".maps");
+	__uint(max_entries, MAX_ENTRIES);
+	__type(key, unsigned int);
+	__type(value, struct map_entry_goroutines_map);
+} goroutines_map_mocked_hash SEC(".maps");
+
+
+static inline int map_hash(const char *buf, int sz)
+{
+	int val = 5381;
+	for (int i = 0; i < sz; i++) {
+		val = ((val << 5) + val) ^ (int)buf[i];
+	}
+	return val;
+}
+
+static inline int map_inner_lookup_goroutines_map(const char *buf, unsigned *hash_out)
+{
+	unsigned hash = map_hash(buf, KEY_SIZE_goroutines_map);
+	if (hash_out)
+		*hash_out = hash;
+	int slot = hash % MAX_ENTRIES;
+	for (unsigned i = slot, j = 0; j < MAX_ENTRIES;
+	     i = (i + 1) % MAX_ENTRIES, j++) {
+		struct map_entry_goroutines_map *ent =
+			(struct map_entry_goroutines_map *)bpf_map_lookup_elem(&goroutines_map_mocked_hash, &i);
+		if (ent && ent->used) {
+			int matched = true;
+			for (int k = 0; k < KEY_SIZE_goroutines_map; k++) {
+				if (buf[k] != ent->key[k]) {
+					matched = false;
+					break;
+				}
+			}
+			if (matched)
+				return i;
+		}
+	}
+	return -1;
+}
+
+static __always_inline int map_update_goroutines_map(const char *key, const char *value)
+{
+	unsigned hash_val;
+	int id = map_inner_lookup_goroutines_map(key, &hash_val);
+	if (id != -1) {
+		struct map_entry_goroutines_map *ent =
+			(struct map_entry_goroutines_map *)bpf_map_lookup_elem(&goroutines_map_mocked_hash, &id);
+		if (ent) {
+			for (int i = 0; i < VALUE_SIZE_goroutines_map; i++)
+				ent->value[i] = value[i];
+		}
+		return 0;
+	} else {
+		int slot = hash_val % MAX_ENTRIES;
+		for (unsigned i = slot, j = 0; j < MAX_ENTRIES;
+		     i = (i + 1) % MAX_ENTRIES, j++) {
+			struct map_entry_goroutines_map *ent =
+				(struct map_entry_goroutines_map *)bpf_map_lookup_elem(
+					&goroutines_map_mocked_hash, &i);
+			if (ent && !ent->used) {
+				ent->used = 1;
+				for (int k = 0; k < KEY_SIZE_goroutines_map; k++)
+					ent->key[k] = key[k];
+				for (int k = 0; k < VALUE_SIZE_goroutines_map; k++)
+					ent->value[k] = value[k];
+				return 0;
+			}
+		}
+		return -1;
+	}
+	return 0;
+}
+static __always_inline void *map_lookup_goroutines_map(const char *key)
+{
+	int id = map_inner_lookup_goroutines_map(key, NULL);
+	if (id == -1)
+		return NULL;
+	struct map_entry_goroutines_map *ent =
+		(struct map_entry_goroutines_map *)bpf_map_lookup_elem(&goroutines_map_mocked_hash, &id);
+	if (ent) {
+		return ent->value;
+	} else
+		return NULL;
+}
+static __always_inline int map_remove_goroutines_map(const char *key)
+{
+	int id = map_inner_lookup_goroutines_map(key, NULL);
+	if (id == -1)
+		return -1;
+	struct map_entry_goroutines_map *ent =
+		(struct map_entry_goroutines_map *)bpf_map_lookup_elem(&goroutines_map_mocked_hash, &id);
+	if (ent) {
+		ent->used = 0;
+		return 0;
+	} else
+		return -1;
+}
 
 static __inline int get_uprobe_offset(int offset_idx)
 {
@@ -113,20 +209,12 @@ static __inline int get_net_poll_fd_sysfd(void)
 
 static __inline __s64 get_current_goroutine(void)
 {
-	//   __u64 current_thread = bpf_get_current_pid_tgid();
+	  __u64 current_thread = bpf_get_current_pid_tgid();
 	//   __s64 *goid_ptr = bpf_map_lookup_elem(&goroutines_map, &current_thread);
-	// __u32 key = 0;
-	// struct spin_lock_container *lock =
-	// 	bpf_map_lookup_elem(&goroutines_map_lock, &key);
-	// if (!lock)
-	// 	return 0;
-	// bpf_spin_lock(&lock->lock);
-	__s64 goid = goroutines_map_mocked;
-	// bpf_spin_unlock(&lock->lock);
-	if (goid != -1) {
-		return goid;
+	__s64 * goid_ptr=map_lookup_goroutines_map((const char*)&current_thread);
+	if(goid_ptr !=NULL) {
+		return *goid_ptr;
 	}
-
 	return 0;
 }
 
@@ -158,14 +246,7 @@ int runtime_casgstatus(struct pt_regs *ctx)
 	bpf_probe_read(&goid, sizeof(goid), g_ptr + offset_g_goid);
 	__u64 current_thread = bpf_get_current_pid_tgid();
 	//   bpf_map_update_elem(&goroutines_map, &current_thread, &goid, BPF_ANY);
-	// __u32 key = 0;
-	// struct spin_lock_container *lock =
-	// bpf_map_lookup_elem(&goroutines_map_lock, &key);
-	// if (!lock)
-	// 	return 0;
-	// bpf_spin_lock(&lock->lock);
-	goroutines_map_mocked = goid;
-	// bpf_spin_unlock(&lock->lock);
+	map_update_goroutines_map((const char*)&current_thread, (const char*)&goid);
 	return 0;
 }
 
@@ -201,14 +282,7 @@ int bpf_func_sched_process_exit(struct sched_comm_exit_ctx *ctx)
 	}
 
 	//   bpf_map_delete_elem(&goroutines_map, &id);
-	// __u32 key = 0;
-	// struct spin_lock_container *lock =
-	// bpf_map_lookup_elem(&goroutines_map_lock, &key);
-	// if (!lock)
-	// 	return 0;
-	// bpf_spin_lock(&lock->lock);
-	goroutines_map_mocked = -1;
-	// bpf_spin_unlock(&lock->lock);
+	map_remove_goroutines_map((const char*)&id);
 	return 0;
 }
 
