@@ -218,10 +218,18 @@ int tracer_bpf_load(struct bpf_tracer *tracer)
 		ebpf_info("map_resize_set \"%s\" map. max_entries:%d\n",
 			  m_conf->map_name, m_conf->max_entries);
 	}
-	struct bpf_map* map = bpf_object__find_map_by_name(pobj, "uprobe_offsets_map_mocked");
-	assert(map!=NULL);
-	bpf_map__set_map_flags(map, bpf_map__map_flags(map) | BPF_F_MMAPABLE);
+	{
+		struct bpf_map* map = bpf_object__find_map_by_name(pobj, "uprobe_offsets_map_mocked_hash");
+		assert(map!=NULL);
+		bpf_map__set_map_flags(map, bpf_map__map_flags(map) | BPF_F_MMAPABLE);
 
+	}
+	{
+		struct bpf_map* map = bpf_object__find_map_by_name(pobj, "goroutines_map_mocked_hash");
+		assert(map!=NULL);
+		bpf_map__set_map_flags(map, bpf_map__map_flags(map) | BPF_F_MMAPABLE);
+
+	}
 	ret = bpf_object__load(pobj);
 	if (ret != 0) {
 		ebpf_info("bpf load \"%s\" failed, error:%s\n",

@@ -48,7 +48,7 @@
 #include "symbol.h"
 #include "socket.h"
 
-#define MAP_GO_OFFSETS_MAP_NAME	"uprobe_offsets_map_mocked"
+#define MAP_GO_OFFSETS_MAP_NAME	"uprobe_offsets_map_mocked_hash"
 #define PROCFS_CHECK_PERIOD  60	// 60 seconds
 static uint64_t procfs_check_count;
 
@@ -726,6 +726,38 @@ static int __attribute__ ((unused)) period_update_procfs(void)
 	update_go_offsets_to_map(tracer);
 	return ETR_OK;
 }
+static inline int map_hash(const char *buf, int sz)
+{
+	int val = 5381;
+	for (int i = 0; i < sz; i++) {
+		val = ((val << 5) + val) ^ (int)buf[i];
+	}
+	return val;
+}
+struct map_entry_uprobe_offsets_map {
+	long used;
+	int key;
+	struct member_offsets value;
+};
+
+#ifndef roundup
+#define roundup(x, y)                                                          \
+	({                                                                     \
+		const typeof(y) __y = y;                                     \
+		(((x) + (__y - 1)) / __y) * __y;                               \
+	})
+#endif // roundup
+
+static size_t bpf_map_mmap_sz(unsigned int value_sz, unsigned int max_entries)
+{
+	const long page_sz = sysconf(_SC_PAGE_SIZE);
+	size_t map_sz;
+
+	map_sz = (size_t)roundup(value_sz, 8) * max_entries;
+	map_sz = roundup(map_sz, page_sz);
+	return map_sz;
+}
+
 
 void update_go_offsets_to_map(struct bpf_tracer *tracer)
 {
@@ -745,11 +777,39 @@ void update_go_offsets_to_map(struct bpf_tracer *tracer)
 		// Update the offsets map
 		struct bpf_map* map =  bpf_object__find_map_by_name(tracer->pobj, MAP_GO_OFFSETS_MAP_NAME);
 		assert(map != NULL && "map should not be nullptr");
-		unsigned key = 0;
-		int err = bpf_map_update_elem(bpf_map__fd(map), &key, offs, BPF_ANY);
-		if(err!=0) {
-			ebpf_warning("Unable to update: %d", err);
-			assert(false && "SHOULD NOT FAIL");
+		// int err = bpf_map_update_elem(bpf_map__fd(map), &key, offs, BPF_ANY);
+		int mfd = bpf_map__fd(map);
+		struct map_entry_uprobe_offsets_map *ents = (struct map_entry_uprobe_offsets_map*)bpf_map__map_extra(map);
+		if(ents==NULL){
+			size_t mmap_sz = bpf_map_mmap_sz(sizeof(struct map_entry_uprobe_offsets_map),229);
+			ents=mmap(NULL,sizeof(ents[0])*229,PROT_READ | PROT_WRITE, MAP_SHARED, mfd, 0);
+			if(ents==MAP_FAILED){
+				ebpf_warning("Unable to mmap: %d", errno);
+				assert(false && "Unable to mmap");
+			}
+			bpf_map__set_map_extra(map, (__u64)ents);
+		}
+
+		struct map_entry_uprobe_offsets_map {
+			long used;
+			char key[4];
+			struct member_offsets value;
+		};
+		unsigned hash_val = (unsigned)map_hash(&pid, sizeof(pid));
+		int updated = 0;
+		for(int i=hash_val %229,j=0;j<229;i=(i+1)%229,j++){
+			long v = 0;
+			if(__atomic_compare_exchange_n(&ents[i].used,&v, 0, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)){
+				ents[i].used=1;
+				ents[i].key=pid;
+				ents[i].value = *offs;
+				updated=1;
+				break;
+			}
+		}
+
+		if(!updated) {
+			ebpf_warning("Unable to update, hash map is full");
 		}
 		len =
 		    snprintf(buff, sizeof(buff), "go%d.%d.%d offsets:",

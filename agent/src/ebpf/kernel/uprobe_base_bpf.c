@@ -28,12 +28,92 @@
 // 	__uint(max_entries, HASH_ENTRIES_MAX);
 // } uprobe_offsets_map SEC(".maps");
 
+static inline int map_hash(const char *buf, int sz)
+{
+	int val = 5381;
+	for (int i = 0; i < sz; i++) {
+		val = ((val << 5) + val) ^ (int)buf[i];
+	}
+	return val;
+}
+
+#define MAX_ENTRIES 229
+#define KEY_SIZE_uprobe_offsets_map 4
+#define VALUE_SIZE_uprobe_offsets_map sizeof(struct member_offsets)
+struct map_entry_uprobe_offsets_map {
+	long used;
+	char key[KEY_SIZE_uprobe_offsets_map];
+	struct member_offsets value;
+};
+
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__type(key, __u32);
-	__type(value, struct member_offsets);
-	__uint(max_entries, 1);
-} uprobe_offsets_map_mocked SEC(".maps");
+	__uint(max_entries, MAX_ENTRIES);
+	__type(key, unsigned int);
+	__type(value, struct map_entry_uprobe_offsets_map);
+} uprobe_offsets_map_mocked_hash SEC(".maps");
+
+
+static inline int map_inner_lookup_uprobe_offsets_map(const char *buf, unsigned *hash_out)
+{
+	unsigned hash = map_hash(buf, KEY_SIZE_uprobe_offsets_map);
+	if (hash_out)
+		*hash_out = hash;
+	int slot = hash % MAX_ENTRIES;
+	for (unsigned i = slot, j = 0; j < MAX_ENTRIES;
+	     i = (i + 1) % MAX_ENTRIES, j++) {
+		struct map_entry_uprobe_offsets_map *ent =
+			(struct map_entry_uprobe_offsets_map *)bpf_map_lookup_elem(&uprobe_offsets_map_mocked_hash, &i);
+		// if (ent && __sync_fetch_and_or(&ent->used, 0)) {
+		if (ent && ent->used) {
+			int matched = true;
+			for (int k = 0; k < KEY_SIZE_uprobe_offsets_map; k++) {
+				if (buf[k] != ent->key[k]) {
+					matched = false;
+					break;
+				}
+			}
+			if (matched)
+				return i;
+		}
+	}
+	return -1;
+}
+
+static __always_inline void *map_lookup_uprobe_offsets_map(const char *key)
+{
+	int id = map_inner_lookup_uprobe_offsets_map(key, NULL);
+	if (id == -1)
+		return NULL;
+	struct map_entry_uprobe_offsets_map *ent =
+		(struct map_entry_uprobe_offsets_map *)bpf_map_lookup_elem(&uprobe_offsets_map_mocked_hash, &id);
+	if (ent) {
+		return &ent->value;
+	} else
+		return NULL;
+}
+
+static __always_inline int map_remove_uprobe_offsets_map(const char *key)
+{
+	int id = map_inner_lookup_uprobe_offsets_map(key, NULL);
+	if (id == -1)
+		return -1;
+	struct map_entry_uprobe_offsets_map *ent =
+		(struct map_entry_uprobe_offsets_map *)bpf_map_lookup_elem(&uprobe_offsets_map_mocked_hash, &id);
+	if (ent) {
+		// __sync_lock_test_and_set (&ent->used, 0);
+		ent->used = 0;
+		return 0;
+	} else
+		return -1;
+}
+
+// struct {
+// 	__uint(type, BPF_MAP_TYPE_ARRAY);
+// 	__type(key, __u32);
+// 	__type(value, struct member_offsets);
+// 	__uint(max_entries, 1);
+// } uprobe_offsets_map_mocked SEC(".maps");
 // int uprobe_offsets_map_set = 0;
 
 
@@ -49,11 +129,10 @@ struct {
 // 	__uint(max_entries, MAX_SYSTEM_THREADS);
 // } goroutines_map SEC(".maps");
 
-#define MAX_ENTRIES 229
 #define KEY_SIZE_goroutines_map 8
 #define VALUE_SIZE_goroutines_map 8
 struct map_entry_goroutines_map {
-	char used;
+	long used;
 	char key[KEY_SIZE_goroutines_map];
 	char value[VALUE_SIZE_goroutines_map];
 };
@@ -66,14 +145,7 @@ struct {
 } goroutines_map_mocked_hash SEC(".maps");
 
 
-static inline int map_hash(const char *buf, int sz)
-{
-	int val = 5381;
-	for (int i = 0; i < sz; i++) {
-		val = ((val << 5) + val) ^ (int)buf[i];
-	}
-	return val;
-}
+
 
 static inline int map_inner_lookup_goroutines_map(const char *buf, unsigned *hash_out)
 {
@@ -85,6 +157,7 @@ static inline int map_inner_lookup_goroutines_map(const char *buf, unsigned *has
 	     i = (i + 1) % MAX_ENTRIES, j++) {
 		struct map_entry_goroutines_map *ent =
 			(struct map_entry_goroutines_map *)bpf_map_lookup_elem(&goroutines_map_mocked_hash, &i);
+		// if (ent && __sync_fetch_and_or(&ent->used, 0)) {
 		if (ent && ent->used) {
 			int matched = true;
 			for (int k = 0; k < KEY_SIZE_goroutines_map; k++) {
@@ -119,6 +192,8 @@ static __always_inline int map_update_goroutines_map(const char *key, const char
 			struct map_entry_goroutines_map *ent =
 				(struct map_entry_goroutines_map *)bpf_map_lookup_elem(
 					&goroutines_map_mocked_hash, &i);
+			// if (ent && !__sync_fetch_and_or (&ent->used, 0)) {
+			// 	__sync_lock_test_and_set (&ent->used, 1);
 			if (ent && !ent->used) {
 				ent->used = 1;
 				for (int k = 0; k < KEY_SIZE_goroutines_map; k++)
@@ -152,6 +227,7 @@ static __always_inline int map_remove_goroutines_map(const char *key)
 	struct map_entry_goroutines_map *ent =
 		(struct map_entry_goroutines_map *)bpf_map_lookup_elem(&goroutines_map_mocked_hash, &id);
 	if (ent) {
+		// __sync_lock_test_and_set (&ent->used, 0);
 		ent->used = 0;
 		return 0;
 	} else
@@ -166,8 +242,7 @@ static __inline int get_uprobe_offset(int offset_idx)
 	id = bpf_get_current_pid_tgid();
 	pid = id >> 32;
 	struct member_offsets *offsets;
-	__u32 key = 0;
-	offsets = bpf_map_lookup_elem(&uprobe_offsets_map_mocked, &key);
+	offsets = map_lookup_uprobe_offsets_map(&pid);
 	if (offsets) {
 		return offsets->data[offset_idx];
 	}
@@ -183,8 +258,7 @@ static __inline __u32 get_go_version(void)
 	id = bpf_get_current_pid_tgid();
 	pid = id >> 32;
 	struct member_offsets *offsets;
-	__u32 key = 0;
-	offsets = bpf_map_lookup_elem(&uprobe_offsets_map_mocked, &key);
+	offsets = map_lookup_uprobe_offsets_map(&pid);
 	if (offsets) {
 		return offsets->version;
 	}
@@ -228,8 +302,8 @@ int runtime_casgstatus(struct pt_regs *ctx)
 
 	__s32 newval;
 	void *g_ptr;
-
-	if (get_go_version() >= GO_VERSION(1, 17, 0)) {
+	__u32 go_version = get_go_version();
+	if (go_version >= GO_VERSION(1, 17, 0)) {
 		g_ptr = (void *)(ctx->rax);
 		newval = (__s32)(ctx->rcx);
 	} else {
@@ -237,7 +311,7 @@ int runtime_casgstatus(struct pt_regs *ctx)
 		bpf_probe_read(&newval, sizeof(newval),
 				   (void *)(ctx->rsp + 20));
 	}
-
+	// bpf_printk("go version=%x\n",go_version);
 	if (newval != 2) {
 		return 0;
 	}
@@ -245,6 +319,7 @@ int runtime_casgstatus(struct pt_regs *ctx)
 	__s64 goid = 0;
 	bpf_probe_read(&goid, sizeof(goid), g_ptr + offset_g_goid);
 	__u64 current_thread = bpf_get_current_pid_tgid();
+	// bpf_printk("thread %lx -> goroutine %d\n",current_thread, goid);
 	//   bpf_map_update_elem(&goroutines_map, &current_thread, &goid, BPF_ANY);
 	map_update_goroutines_map((const char*)&current_thread, (const char*)&goid);
 	return 0;
@@ -264,7 +339,7 @@ int bpf_func_sched_process_exit(struct sched_comm_exit_ctx *ctx)
 	// If is a process, clear uprobe_offsets_map element and submit event.
 	if (pid == tid) {
 		// bpf_map_delete_elem(&uprobe_offsets_map, &pid);
-		// __atomic_store_n(&uprobe_offsets_map_set, 0, __ATOMIC_RELEASE);
+		map_remove_uprobe_offsets_map(&pid);
 		struct process_event_t data;
 		data.pid = pid;
 		data.meta.event_type = EVENT_TYPE_PROC_EXIT;
